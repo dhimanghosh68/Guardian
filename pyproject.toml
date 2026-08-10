@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "project-guardian"
+version = "0.1.0"
+description = "Safety-first isolated development guardian"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9,<10",
+]
