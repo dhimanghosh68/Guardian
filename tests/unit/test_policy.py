@@ -50,3 +50,24 @@ def test_protected_project_sibling_is_not_protected() -> None:
     assert not boundary.protects(
         Path(str(project) + "-backup")
     )
+
+
+def test_operation_policy_allows_non_destructive_operations() -> None:
+    from guardian.core.operation import GuardianOperation
+    from guardian.policy import OperationPolicy
+
+    policy = OperationPolicy()
+
+    assert policy.allows(GuardianOperation.INSPECT)
+    assert policy.allows(GuardianOperation.MODIFY)
+    assert policy.allows(GuardianOperation.WRITE)
+    assert policy.allows(GuardianOperation.RESTORE)
+
+
+def test_operation_policy_blocks_delete() -> None:
+    from guardian.core.operation import GuardianOperation
+    from guardian.policy import OperationPolicy
+
+    policy = OperationPolicy()
+
+    assert not policy.allows(GuardianOperation.DELETE)

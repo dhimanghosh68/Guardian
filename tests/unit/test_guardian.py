@@ -109,3 +109,32 @@ def test_guardian_host_policy_overrides_workspace() -> None:
     assert not result.allowed
     assert result.status is GuardianStatus.BLOCKED
     assert result.message == "target is protected by host policy"
+
+
+def test_guardian_blocks_delete_by_operation_policy() -> None:
+    guardian = Guardian()
+
+    request = GuardianRequest(
+        target=Path("/tmp/example"),
+        operation="delete",
+    )
+
+    result = guardian.evaluate(request)
+
+    assert result.status is GuardianStatus.BLOCKED
+    assert not result.allowed
+    assert result.message == "operation is blocked by Guardian policy"
+
+
+def test_guardian_operation_policy_runs_before_host_policy() -> None:
+    guardian = Guardian()
+
+    request = GuardianRequest(
+        target=Path("/etc"),
+        operation="delete",
+    )
+
+    result = guardian.evaluate(request)
+
+    assert result.status is GuardianStatus.BLOCKED
+    assert result.message == "operation is blocked by Guardian policy"
