@@ -23,17 +23,22 @@ class SafetyBoundary:
         """Return True when path is inside a protected location."""
         candidate = path.expanduser().resolve(strict=False)
 
-        for protected in self.protected_paths + self.protected_projects:
-            protected_path = protected.expanduser().resolve(strict=False)
+        return any(
+            self._contains(protected, candidate)
+            for protected in self.protected_paths + self.protected_projects
+        )
 
-            if candidate == protected_path:
-                return True
+    @staticmethod
+    def _contains(parent: Path, candidate: Path) -> bool:
+        """Return True when candidate is parent or below parent."""
+        protected = parent.expanduser().resolve(strict=False)
 
-            try:
-                candidate.relative_to(protected_path)
-            except ValueError:
-                continue
-            else:
-                return True
+        if candidate == protected:
+            return True
 
-        return False
+        try:
+            candidate.relative_to(protected)
+        except ValueError:
+            return False
+
+        return True

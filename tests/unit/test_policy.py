@@ -26,3 +26,27 @@ def test_protected_project_is_protected() -> None:
 
     assert boundary.protects(project)
     assert boundary.protects(project / "src")
+
+
+def test_unrelated_path_with_similar_name_is_not_protected() -> None:
+    boundary = SafetyBoundary()
+
+    assert not boundary.protects(Path("/etc-backup"))
+    assert not boundary.protects(Path("/usr-local"))
+
+
+def test_nested_protected_path_is_protected() -> None:
+    boundary = SafetyBoundary()
+
+    assert boundary.protects(Path("/var/lib/guardian"))
+    assert boundary.protects(Path("/usr/local/bin/tool"))
+
+
+def test_protected_project_sibling_is_not_protected() -> None:
+    boundary = SafetyBoundary()
+
+    project = Path.home() / "Development" / "react"
+
+    assert not boundary.protects(
+        Path(str(project) + "-backup")
+    )
