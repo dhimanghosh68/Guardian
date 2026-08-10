@@ -15,5 +15,6 @@ class GuardianResult:
 
     @property
     def allowed(self) -> bool:
-        """Return whether the requested operation is allowed."""
+        """Return whether Guardian allowed the requested operation."""
+
         return self.status is GuardianStatus.ALLOWED

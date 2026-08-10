@@ -17,3 +17,8 @@ class RequestValidator:
 
         if not request.target:
             raise RequestValidationError("target must not be empty")
+
+        try:
+            request.parsed_operation()
+        except ValueError as exc:
+            raise RequestValidationError(str(exc)) from exc

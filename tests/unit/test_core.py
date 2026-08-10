@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 from guardian.core import GuardianRequest, GuardianResult, GuardianStatus
@@ -48,3 +49,28 @@ def test_blocked_result_is_not_allowed() -> None:
     )
 
     assert not result.allowed
+
+
+def test_operation_parses_supported_operation() -> None:
+    from guardian.core.operation import GuardianOperation
+
+    assert GuardianOperation.parse("modify") is GuardianOperation.MODIFY
+    assert GuardianOperation.parse(" WRITE ") is GuardianOperation.WRITE
+
+
+def test_operation_rejects_unknown_operation() -> None:
+    from guardian.core.operation import GuardianOperation
+
+    with pytest.raises(ValueError, match="unsupported"):
+        GuardianOperation.parse("format-disk")
+
+
+def test_request_parses_operation() -> None:
+    request = GuardianRequest(
+        target=Path("/tmp/example"),
+        operation="modify",
+    )
+
+    from guardian.core.operation import GuardianOperation
+
+    assert request.parsed_operation() is GuardianOperation.MODIFY
