@@ -173,3 +173,230 @@ def test_checkpoint_codec_rejects_unknown_fields() -> None:
 def test_checkpoint_codec_rejects_non_object_payload() -> None:
     with pytest.raises(ValueError, match="must be an object"):
         CheckpointCodec.decode("[]")
+
+
+def test_checkpoint_store_contract_is_runtime_usable() -> None:
+    from guardian.checkpoint import CheckpointStore
+
+    assert CheckpointStore is not None
+
+def test_file_checkpoint_store_round_trips_checkpoint(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    store.save(checkpoint)
+
+    assert store.exists(checkpoint.checkpoint_id)
+    assert store.load(checkpoint.checkpoint_id) == checkpoint
+
+
+def test_file_checkpoint_store_uses_checkpoint_id_filename(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    store.save(checkpoint)
+
+    assert (
+        store.root / f"{checkpoint.checkpoint_id}.json"
+    ).is_file()
+
+
+def test_file_checkpoint_store_rejects_corruption(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    store.save(checkpoint)
+
+    path = store.root / f"{checkpoint.checkpoint_id}.json"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '"modify"',
+            '"delete"',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="integrity"):
+        store.load(checkpoint.checkpoint_id)
+
+
+def test_file_checkpoint_store_rejects_identifier_mismatch(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+
+    first = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+    second = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "other",
+    )
+
+    store.save(first)
+
+    path = store.root / f"{first.checkpoint_id}.json"
+    path.write_text(
+        store._encode(second),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="identifier"):
+        store.load(first.checkpoint_id)
+
+
+def test_file_checkpoint_store_missing_checkpoint_is_explicit(tmp_path) -> None:
+    from uuid import uuid4
+
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+
+    with pytest.raises(FileNotFoundError, match="checkpoint not found"):
+        store.load(uuid4())
+
+
+def test_file_checkpoint_store_delete_is_idempotent(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    store.save(checkpoint)
+    assert store.exists(checkpoint.checkpoint_id)
+
+    store.delete(checkpoint.checkpoint_id)
+    assert not store.exists(checkpoint.checkpoint_id)
+
+    store.delete(checkpoint.checkpoint_id)
+
+
+def test_checkpoint_manager_persists_checkpoint(tmp_path) -> None:
+    from guardian.checkpoint import (
+        CheckpointManager,
+        FileCheckpointStore,
+    )
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    manager = CheckpointManager(store=store)
+
+    checkpoint = manager.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    manager.save(checkpoint)
+
+    assert manager.load(checkpoint.checkpoint_id) == checkpoint
+
+
+def test_file_checkpoint_store_persists_checkpoint(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    store.save(checkpoint)
+
+    assert store.exists(checkpoint.checkpoint_id)
+    assert store.load(checkpoint.checkpoint_id) == checkpoint
+
+
+def test_file_checkpoint_store_uses_checkpoint_id_filename(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    root = tmp_path / "checkpoints"
+    store = FileCheckpointStore(root)
+
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    store.save(checkpoint)
+
+    assert (
+        root / f"{checkpoint.checkpoint_id}.json"
+    ).is_file()
+
+
+def test_file_checkpoint_store_rejects_missing_checkpoint(tmp_path) -> None:
+    from uuid import uuid4
+
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+
+    with pytest.raises(FileNotFoundError, match="checkpoint not found"):
+        store.load(uuid4())
+
+
+def test_checkpoint_manager_persists_checkpoint(tmp_path) -> None:
+    from guardian.checkpoint import (
+        CheckpointManager,
+        FileCheckpointStore,
+    )
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    manager = CheckpointManager(store=store)
+
+    checkpoint = manager.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    assert store.exists(checkpoint.checkpoint_id)
+    assert manager.load(checkpoint.checkpoint_id) == checkpoint
+
+
+def test_checkpoint_manager_prepare_persists_checkpoint(tmp_path) -> None:
+    from guardian.checkpoint import (
+        CheckpointManager,
+        FileCheckpointStore,
+    )
+
+    workspace = SandboxWorkspace(tmp_path / "workspace")
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    manager = CheckpointManager(workspace=workspace, store=store)
+
+    request = GuardianRequest(
+        target=tmp_path / "workspace" / "project",
+        operation="modify",
+    )
+
+    checkpoint = manager.prepare(request)
+
+    assert manager.load(checkpoint.checkpoint_id) == checkpoint
