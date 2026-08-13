@@ -735,3 +735,322 @@ def test_restore_manager_rejects_without_capable_backend() -> None:
 
     assert result.status is RestoreStatus.REJECTED
     assert "no capable" in result.message
+
+
+def test_filesystem_snapshot_store_captures_and_restores_file(tmp_path) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    target = workspace / "project.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("original", encoding="utf-8")
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    target.write_text("modified", encoding="utf-8")
+    snapshots.restore(checkpoint)
+
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_filesystem_snapshot_store_captures_and_restores_directory(
+    tmp_path,
+) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    target = workspace / "project"
+    target.mkdir(parents=True)
+    (target / "one.txt").write_text("one", encoding="utf-8")
+    (target / "two.txt").write_text("two", encoding="utf-8")
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    (target / "one.txt").write_text("changed", encoding="utf-8")
+    (target / "three.txt").write_text("three", encoding="utf-8")
+
+    snapshots.restore(checkpoint)
+
+    assert (target / "one.txt").read_text(encoding="utf-8") == "one"
+    assert (target / "two.txt").read_text(encoding="utf-8") == "two"
+    assert not (target / "three.txt").exists()
+
+
+def test_filesystem_snapshot_store_rejects_target_escape(tmp_path) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=outside,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+
+    with pytest.raises(PermissionError, match="outside"):
+        snapshots.capture(checkpoint)
+
+
+def test_filesystem_restore_backend_requires_snapshot(tmp_path) -> None:
+    from guardian.restore import (
+        FilesystemRestoreBackend,
+        FilesystemSnapshotStore,
+    )
+
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    backend = FilesystemRestoreBackend(snapshots)
+
+    assert backend.capabilities == frozenset({"checkpoint.restore"})
+    assert not backend.can_restore(checkpoint)
+
+
+def test_filesystem_restore_backend_restores_snapshot(tmp_path) -> None:
+    from guardian.restore import (
+        FilesystemRestoreBackend,
+        FilesystemSnapshotStore,
+        RestorePlan,
+    )
+
+    workspace = tmp_path / "workspace"
+    target = workspace / "project.txt"
+    workspace.mkdir()
+    target.write_text("original", encoding="utf-8")
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    target.write_text("changed", encoding="utf-8")
+
+    backend = FilesystemRestoreBackend(snapshots)
+    plan = RestorePlan.from_checkpoint(checkpoint)
+
+    assert backend.can_restore(checkpoint)
+
+    backend.restore(plan)
+
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_checkpoint_manager_can_capture_and_restore_filesystem(
+    tmp_path,
+) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import (
+        FilesystemRestoreBackend,
+        FilesystemSnapshotStore,
+        RestoreBackendRegistry,
+        RestoreStatus,
+    )
+
+    workspace = tmp_path / "workspace"
+    target = workspace / "project.txt"
+    workspace.mkdir()
+    target.write_text("original", encoding="utf-8")
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    backend = FilesystemRestoreBackend(snapshots)
+
+    registry = RestoreBackendRegistry()
+    registry.register(backend)
+
+    manager = CheckpointManager(
+        restore_registry=registry,
+        snapshot_store=snapshots,
+    )
+
+    checkpoint = manager.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    manager.capture(checkpoint)
+
+    target.write_text("changed", encoding="utf-8")
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.RESTORED
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_filesystem_snapshot_rejects_external_symlink(tmp_path) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    target = workspace / "project"
+    target.mkdir()
+    (target / "escape").symlink_to(outside)
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+
+    with pytest.raises(PermissionError, match="outside"):
+        snapshots.capture(checkpoint)
+
+
+def test_filesystem_snapshot_allows_internal_symlink(tmp_path) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    source = workspace / "source.txt"
+    source.write_text("safe", encoding="utf-8")
+
+    target = workspace / "project"
+    target.mkdir()
+    link = target / "link"
+    link.symlink_to(source)
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    source.write_text("changed", encoding="utf-8")
+    snapshots.restore(checkpoint)
+
+    assert link.is_symlink()
+    assert link.resolve() == source.resolve()
+
+
+def test_filesystem_restore_preserves_target_when_staging_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    target = workspace / "project.txt"
+    target.write_text("original", encoding="utf-8")
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    target.write_text("current", encoding="utf-8")
+
+    original_copy_entry = snapshots._copy_entry
+
+    def failing_copy_entry(*args, **kwargs):
+        raise RuntimeError("staging failure")
+
+    monkeypatch.setattr(snapshots, "_copy_entry", failing_copy_entry)
+
+    with pytest.raises(RuntimeError, match="staging failure"):
+        snapshots.restore(checkpoint)
+
+    assert target.read_text(encoding="utf-8") == "current"
+
+    monkeypatch.setattr(
+        snapshots,
+        "_copy_entry",
+        original_copy_entry,
+    )
+
+def test_checkpoint_manager_restores_from_snapshot_store(tmp_path) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import FilesystemSnapshotStore, RestoreStatus
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    target = workspace / "project"
+    target.mkdir()
+    (target / "file.txt").write_text("original", encoding="utf-8")
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    manager = CheckpointManager(snapshot_store=snapshots)
+
+    checkpoint = manager.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    manager.capture(checkpoint)
+    (target / "file.txt").write_text("changed", encoding="utf-8")
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.RESTORED
+    assert (target / "file.txt").read_text(encoding="utf-8") == "original"
+
+
+def test_checkpoint_manager_snapshot_backend_rejects_missing_snapshot(
+    tmp_path,
+) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import FilesystemSnapshotStore, RestoreStatus
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    target = workspace / "project"
+    target.mkdir()
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    manager = CheckpointManager(snapshot_store=snapshots)
+
+    checkpoint = manager.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.REJECTED
+    assert "no capable" in result.message
