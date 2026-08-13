@@ -3,7 +3,12 @@ from pathlib import Path
 from guardian.checkpoint.state import CheckpointState
 from guardian.checkpoint.store import CheckpointStore
 from guardian.core.request import GuardianRequest
-from guardian.restore import RestoreBackend, RestoreResult, RestoreStatus
+from guardian.restore import (
+    RestoreBackend,
+    RestorePlan,
+    RestoreResult,
+    RestoreStatus,
+)
 from guardian.sandbox import SandboxWorkspace
 
 
@@ -86,21 +91,43 @@ class CheckpointManager:
         return self._store.load(checkpoint_id)
 
     def restore(self, checkpoint: CheckpointState) -> RestoreResult:
-        """Restore a checkpoint through a supplied capability backend."""
+        """Validate and execute restoration through a capability backend."""
+
+        target = checkpoint.normalized_target()
+
+        try:
+            plan = RestorePlan.from_checkpoint(checkpoint)
+        except (PermissionError, ValueError) as exc:
+            return RestoreResult(
+                status=RestoreStatus.REJECTED,
+                checkpoint_id=checkpoint.checkpoint_id,
+                target=target,
+                message=str(exc),
+            )
 
         if self._restore_backend is None:
             return RestoreResult(
                 status=RestoreStatus.REJECTED,
-                checkpoint_id=checkpoint.checkpoint_id,
-                target=checkpoint.normalized_target(),
+                checkpoint_id=plan.checkpoint_id,
+                target=plan.target,
                 message="no restoration backend is available",
+            )
+
+        try:
+            plan.validate_against(checkpoint)
+        except (PermissionError, ValueError) as exc:
+            return RestoreResult(
+                status=RestoreStatus.REJECTED,
+                checkpoint_id=plan.checkpoint_id,
+                target=plan.target,
+                message=str(exc),
             )
 
         if not self._restore_backend.can_restore(checkpoint):
             return RestoreResult(
                 status=RestoreStatus.REJECTED,
-                checkpoint_id=checkpoint.checkpoint_id,
-                target=checkpoint.normalized_target(),
+                checkpoint_id=plan.checkpoint_id,
+                target=plan.target,
                 message="restoration backend does not support this checkpoint",
             )
 
@@ -109,15 +136,15 @@ class CheckpointManager:
         except Exception as exc:
             return RestoreResult(
                 status=RestoreStatus.FAILED,
-                checkpoint_id=checkpoint.checkpoint_id,
-                target=checkpoint.normalized_target(),
+                checkpoint_id=plan.checkpoint_id,
+                target=plan.target,
                 message=f"restoration failed: {exc}",
             )
 
         return RestoreResult(
             status=RestoreStatus.RESTORED,
-            checkpoint_id=checkpoint.checkpoint_id,
-            target=checkpoint.normalized_target(),
+            checkpoint_id=plan.checkpoint_id,
+            target=plan.target,
             message="checkpoint restored successfully",
         )
 

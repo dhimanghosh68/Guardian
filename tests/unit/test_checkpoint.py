@@ -482,3 +482,103 @@ def test_checkpoint_restore_reports_backend_failure(tmp_path) -> None:
 
     assert result.status is RestoreStatus.FAILED
     assert "backend failure" in result.message
+
+def test_restore_plan_preserves_checkpoint_identity(tmp_path) -> None:
+    from guardian.restore import RestorePlan
+
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    plan = RestorePlan.from_checkpoint(checkpoint)
+
+    assert plan.checkpoint_id == checkpoint.checkpoint_id
+    assert plan.workspace == checkpoint.normalized_workspace()
+    assert plan.target == checkpoint.normalized_target()
+
+
+def test_restore_plan_rejects_identifier_substitution(tmp_path) -> None:
+    from guardian.restore import RestorePlan
+
+    first = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+    second = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "other",
+    )
+
+    plan = RestorePlan.from_checkpoint(first)
+
+    with pytest.raises(ValueError, match="identifier mismatch"):
+        plan.validate_against(second)
+
+
+def test_restore_plan_rejects_workspace_substitution(tmp_path) -> None:
+    from guardian.restore import RestorePlan
+
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+    substituted = CheckpointState(
+        workspace=tmp_path / "other-workspace",
+        operation=checkpoint.operation,
+        target=tmp_path / "other-workspace" / "project",
+        checkpoint_id=checkpoint.checkpoint_id,
+    )
+
+    plan = RestorePlan.from_checkpoint(checkpoint)
+
+    with pytest.raises(ValueError, match="workspace mismatch"):
+        plan.validate_against(substituted)
+
+
+def test_restore_plan_rejects_target_escape(tmp_path) -> None:
+    from guardian.restore import RestoreRequest
+
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    request = RestoreRequest(
+        checkpoint_id=checkpoint.checkpoint_id,
+        workspace=tmp_path / "workspace",
+        target=tmp_path / "outside",
+    )
+
+    with pytest.raises(PermissionError, match="outside"):
+        request.validate_boundary()
+
+
+def test_restore_backend_is_not_called_for_invalid_plan(tmp_path) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import RestoreStatus
+
+    class Backend:
+        def can_restore(self, checkpoint) -> bool:
+            raise AssertionError("backend must not be queried")
+
+        def restore(self, checkpoint) -> None:
+            raise AssertionError("backend must not be invoked")
+
+    manager = CheckpointManager(restore_backend=Backend())
+
+    checkpoint = CheckpointState(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "outside",
+    )
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.REJECTED
+    assert "outside" in result.message
