@@ -582,3 +582,156 @@ def test_restore_backend_is_not_called_for_invalid_plan(tmp_path) -> None:
 
     assert result.status is RestoreStatus.REJECTED
     assert "outside" in result.message
+
+def test_restore_backend_registry_selects_first_capable_backend() -> None:
+    from guardian.restore import RestoreBackendRegistry
+
+    class Backend:
+        def __init__(self, capable: bool) -> None:
+            self.capable = capable
+
+        @property
+        def capabilities(self) -> frozenset[str]:
+            return frozenset({"checkpoint.restore"}) if self.capable else frozenset()
+
+        def can_restore(self, checkpoint) -> bool:
+            return self.capable
+
+        def restore(self, plan) -> None:
+            pass
+
+    registry = RestoreBackendRegistry()
+    unsupported = Backend(False)
+    supported = Backend(True)
+
+    registry.register(unsupported)
+    registry.register(supported)
+
+    checkpoint = CheckpointState.create(
+        workspace=__import__("pathlib").Path("/tmp/workspace"),
+        operation="modify",
+        target=__import__("pathlib").Path("/tmp/workspace/project"),
+    )
+
+    assert registry.select(checkpoint) is supported
+
+
+def test_restore_backend_registry_preserves_registration_order() -> None:
+    from guardian.restore import RestoreBackendRegistry
+
+    class Backend:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        @property
+        def capabilities(self) -> frozenset[str]:
+            return frozenset({"checkpoint.restore"})
+
+        def can_restore(self, checkpoint) -> bool:
+            return True
+
+        def restore(self, plan) -> None:
+            pass
+
+    first = Backend("first")
+    second = Backend("second")
+
+    registry = RestoreBackendRegistry()
+    registry.register(first)
+    registry.register(second)
+
+    checkpoint = CheckpointState.create(
+        workspace=Path("/tmp/workspace"),
+        operation="modify",
+        target=Path("/tmp/workspace/project"),
+    )
+
+    assert registry.select(checkpoint) is first
+    assert registry.discover(checkpoint) == (first, second)
+
+
+def test_restore_backend_registry_deduplicates_backend() -> None:
+    from guardian.restore import RestoreBackendRegistry
+
+    class Backend:
+        @property
+        def capabilities(self) -> frozenset[str]:
+            return frozenset({"checkpoint.restore"})
+
+        def can_restore(self, checkpoint) -> bool:
+            return True
+
+        def restore(self, plan) -> None:
+            pass
+
+    backend = Backend()
+    registry = RestoreBackendRegistry()
+
+    registry.register(backend)
+    registry.register(backend)
+
+    checkpoint = CheckpointState.create(
+        workspace=Path("/tmp/workspace"),
+        operation="modify",
+        target=Path("/tmp/workspace/project"),
+    )
+
+    assert registry.discover(checkpoint) == (backend,)
+
+
+def test_restore_backend_registry_returns_none_without_capable_backend() -> None:
+    from guardian.restore import RestoreBackendRegistry
+
+    class Backend:
+        @property
+        def capabilities(self) -> frozenset[str]:
+            return frozenset()
+
+        def can_restore(self, checkpoint) -> bool:
+            return False
+
+        def restore(self, plan) -> None:
+            raise AssertionError("must not execute")
+
+    registry = RestoreBackendRegistry()
+    registry.register(Backend())
+
+    checkpoint = CheckpointState.create(
+        workspace=Path("/tmp/workspace"),
+        operation="modify",
+        target=Path("/tmp/workspace/project"),
+    )
+
+    assert registry.select(checkpoint) is None
+
+
+def test_restore_manager_rejects_without_capable_backend() -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import RestoreBackendRegistry, RestoreStatus
+
+    class Backend:
+        @property
+        def capabilities(self) -> frozenset[str]:
+            return frozenset()
+
+        def can_restore(self, checkpoint) -> bool:
+            return False
+
+        def restore(self, plan) -> None:
+            raise AssertionError("must not execute")
+
+    registry = RestoreBackendRegistry()
+    registry.register(Backend())
+
+    manager = CheckpointManager(restore_registry=registry)
+
+    checkpoint = CheckpointState.create(
+        workspace=Path("/tmp/workspace"),
+        operation="modify",
+        target=Path("/tmp/workspace/project"),
+    )
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.REJECTED
+    assert "no capable" in result.message
