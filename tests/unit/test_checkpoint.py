@@ -1210,3 +1210,129 @@ def test_filesystem_snapshot_rejects_restore_target_outside_workspace(
 
     with pytest.raises(PermissionError, match="outside"):
         snapshots.restore(substituted)
+
+def test_checkpoint_codec_rejects_non_string_checkpoint_id() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":123,'
+        '"workspace":"/tmp/workspace",'
+        '"operation":"modify",'
+        '"target":"/tmp/workspace/project"}'
+    )
+
+    with pytest.raises((ValueError, TypeError), match="checkpoint"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_codec_rejects_non_string_workspace() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":"00000000-0000-0000-0000-000000000001",'
+        '"workspace":123,'
+        '"operation":"modify",'
+        '"target":"/tmp/workspace/project"}'
+    )
+
+    with pytest.raises(ValueError, match="workspace"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_codec_rejects_non_string_operation() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":"00000000-0000-0000-0000-000000000001",'
+        '"workspace":"/tmp/workspace",'
+        '"operation":123,'
+        '"target":"/tmp/workspace/project"}'
+    )
+
+    with pytest.raises(ValueError, match="operation"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_codec_rejects_non_string_target() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":"00000000-0000-0000-0000-000000000001",'
+        '"workspace":"/tmp/workspace",'
+        '"operation":"modify",'
+        '"target":123}'
+    )
+
+    with pytest.raises(ValueError, match="target"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_codec_rejects_invalid_checkpoint_id() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":"not-a-uuid",'
+        '"workspace":"/tmp/workspace",'
+        '"operation":"modify",'
+        '"target":"/tmp/workspace/project"}'
+    )
+
+    with pytest.raises(ValueError, match="checkpoint"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_codec_rejects_empty_operation() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":"00000000-0000-0000-0000-000000000001",'
+        '"workspace":"/tmp/workspace",'
+        '"operation":"   ",'
+        '"target":"/tmp/workspace/project"}'
+    )
+
+    with pytest.raises(ValueError, match="operation"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_codec_rejects_empty_workspace() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":"00000000-0000-0000-0000-000000000001",'
+        '"workspace":"",'
+        '"operation":"modify",'
+        '"target":"/tmp/workspace/project"}'
+    )
+
+    with pytest.raises(ValueError, match="workspace"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_codec_rejects_empty_target() -> None:
+    from guardian.checkpoint import CheckpointCodec
+
+    payload = (
+        '{"checkpoint_id":"00000000-0000-0000-0000-000000000001",'
+        '"workspace":"/tmp/workspace",'
+        '"operation":"modify",'
+        '"target":""}'
+    )
+
+    with pytest.raises(ValueError, match="target"):
+        CheckpointCodec.decode(payload)
+
+
+def test_checkpoint_store_does_not_leave_temporary_file(tmp_path) -> None:
+    from guardian.checkpoint import FileCheckpointStore
+
+    store = FileCheckpointStore(tmp_path / "checkpoints")
+    checkpoint = CheckpointState.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    store.save(checkpoint)
+
+    assert not list(store.root.glob("*.tmp"))
