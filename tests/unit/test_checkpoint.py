@@ -1054,3 +1054,159 @@ def test_checkpoint_manager_snapshot_backend_rejects_missing_snapshot(
 
     assert result.status is RestoreStatus.REJECTED
     assert "no capable" in result.message
+
+
+def test_filesystem_snapshot_preserves_relative_internal_symlink(
+    tmp_path,
+) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    target = workspace / "project"
+    target.mkdir()
+
+    source = target / "source.txt"
+    source.write_text("original", encoding="utf-8")
+
+    link = target / "link.txt"
+    link.symlink_to("source.txt")
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    source.write_text("changed", encoding="utf-8")
+    link.unlink()
+
+    snapshots.restore(checkpoint)
+
+    assert link.is_symlink()
+    assert link.read_text(encoding="utf-8") == "changed"
+    assert link.readlink() == Path("source.txt")
+
+
+def test_filesystem_snapshot_preserves_broken_internal_symlink(
+    tmp_path,
+) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    target = workspace / "project"
+    target.mkdir()
+
+    link = target / "missing.txt"
+    link.symlink_to("missing.txt")
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    link.unlink()
+    snapshots.restore(checkpoint)
+
+    assert link.is_symlink()
+    assert link.readlink() == Path("missing.txt")
+    assert not link.exists()
+
+
+def test_filesystem_snapshot_rejects_symlink_outside_workspace_after_resolution(
+    tmp_path,
+) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    target = workspace / "project"
+    target.mkdir()
+
+    link = target / "escape"
+    link.symlink_to(outside)
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+
+    with pytest.raises(PermissionError, match="outside"):
+        snapshots.capture(checkpoint)
+
+
+def test_filesystem_snapshot_rejects_symlinked_target_outside_workspace(
+    tmp_path,
+) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    target = workspace / "project.txt"
+    target.symlink_to(outside)
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+
+    with pytest.raises(PermissionError, match="outside"):
+        snapshots.capture(checkpoint)
+
+
+def test_filesystem_snapshot_rejects_restore_target_outside_workspace(
+    tmp_path,
+) -> None:
+    from guardian.restore import FilesystemSnapshotStore
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    target = workspace / "project"
+    target.mkdir()
+
+    checkpoint = CheckpointState.create(
+        workspace=workspace,
+        operation="modify",
+        target=target,
+    )
+
+    snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
+    snapshots.capture(checkpoint)
+
+    substituted = CheckpointState(
+        workspace=workspace,
+        operation="restore",
+        target=outside,
+        checkpoint_id=checkpoint.checkpoint_id,
+    )
+
+    with pytest.raises(PermissionError, match="outside"):
+        snapshots.restore(substituted)

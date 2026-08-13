@@ -8,6 +8,7 @@ class RepairAction:
 
     operation: str
     target: Path
+    content: str | None = None
 
     def normalized_target(self) -> Path:
         return self.target.expanduser().resolve(strict=False)

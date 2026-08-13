@@ -45,6 +45,7 @@ class FilesystemSnapshotStore:
                 source=target,
                 destination=snapshot,
                 workspace=checkpoint.normalized_workspace(),
+                logical_path=target,
             )
 
             metadata.write_text(
@@ -102,22 +103,151 @@ class FilesystemSnapshotStore:
                 source=source,
                 destination=staged,
                 workspace=checkpoint.normalized_workspace(),
+                logical_path=target,
             )
 
-            self._replace_target(target, staged)
+            if source.is_dir() and target.is_dir() and not target.is_symlink():
+                self._restore_directory_contents(
+                    source=staged,
+                    target=target,
+                    workspace=checkpoint.normalized_workspace(),
+                    logical_path=target,
+                )
+            else:
+                self._replace_target(target, staged)
         finally:
             shutil.rmtree(temporary, ignore_errors=True)
+
+    def _restore_directory_contents(
+        self,
+        source: Path,
+        target: Path,
+        workspace: Path,
+        logical_path: Path,
+    ) -> None:
+        """Restore directory entries while preserving symlink referents."""
+
+        protected = self._snapshot_symlink_referents(
+            source=source,
+            target=target,
+            workspace=workspace,
+            logical_path=logical_path,
+        )
+
+        snapshot_names = {entry.name for entry in source.iterdir()}
+
+        for existing in target.iterdir():
+            if existing.name not in snapshot_names:
+                self._remove_entry(existing)
+
+        for entry in source.iterdir():
+            destination = target / entry.name
+
+            if entry.is_symlink():
+                if destination.exists() or destination.is_symlink():
+                    self._remove_entry(destination)
+
+                self._copy_entry(
+                    source=entry,
+                    destination=destination,
+                    workspace=workspace,
+                    logical_path=logical_path / entry.name,
+                )
+                continue
+
+            if destination in protected:
+                continue
+
+            if entry.is_dir() and destination.is_dir() and not destination.is_symlink():
+                self._restore_directory_contents(
+                    source=entry,
+                    target=destination,
+                    workspace=workspace,
+                    logical_path=logical_path / entry.name,
+                )
+                shutil.copystat(
+                    entry,
+                    destination,
+                    follow_symlinks=False,
+                )
+                continue
+
+            if destination.exists() or destination.is_symlink():
+                self._remove_entry(destination)
+
+            self._copy_entry(
+                source=entry,
+                destination=destination,
+                workspace=workspace,
+                logical_path=logical_path / entry.name,
+            )
+
+    def _snapshot_symlink_referents(
+        self,
+        source: Path,
+        target: Path,
+        workspace: Path,
+        logical_path: Path,
+    ) -> set[Path]:
+        """Return existing target paths referenced by internal snapshot symlinks."""
+
+        protected: set[Path] = set()
+
+        for entry in source.iterdir():
+            entry_logical = logical_path / entry.name
+
+            if entry.is_symlink():
+                link_target = os.readlink(entry)
+                resolved = self._resolve_symlink_target(
+                    entry_logical,
+                    link_target,
+                )
+
+                try:
+                    resolved.relative_to(workspace)
+                except ValueError as exc:
+                    raise PermissionError(
+                        "snapshot contains a symlink outside the authorized workspace"
+                    ) from exc
+
+                try:
+                    resolved.relative_to(logical_path)
+                except ValueError:
+                    continue
+
+                if resolved.exists() or resolved.is_symlink():
+                    protected.add(resolved)
+
+                continue
+
+            if entry.is_dir():
+                protected.update(
+                    self._snapshot_symlink_referents(
+                        source=entry,
+                        target=target / entry.name,
+                        workspace=workspace,
+                        logical_path=entry_logical,
+                    )
+                )
+
+        return protected
 
     def _copy_entry(
         self,
         source: Path,
         destination: Path,
         workspace: Path,
+        logical_path: Path,
     ) -> None:
         """Copy one filesystem entry while enforcing symlink boundaries."""
 
         if source.is_symlink():
-            resolved = source.resolve(strict=False)
+            link_target = os.readlink(source)
+
+            resolved = self._resolve_symlink_target(
+                logical_path,
+                link_target,
+            )
 
             try:
                 resolved.relative_to(workspace)
@@ -127,7 +257,7 @@ class FilesystemSnapshotStore:
                 ) from exc
 
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.symlink_to(os.readlink(source))
+            destination.symlink_to(link_target)
             return
 
         if source.is_dir():
@@ -138,6 +268,7 @@ class FilesystemSnapshotStore:
                     source=child,
                     destination=destination / child.name,
                     workspace=workspace,
+                    logical_path=logical_path / child.name,
                 )
 
             shutil.copystat(
@@ -153,6 +284,25 @@ class FilesystemSnapshotStore:
             destination,
             follow_symlinks=False,
         )
+
+    @staticmethod
+    def _resolve_symlink_target(
+        logical_entry: Path,
+        link_target: str,
+    ) -> Path:
+        """Resolve a symlink for authorization without requiring a valid target."""
+
+        if os.path.isabs(link_target):
+            candidate = Path(os.path.normpath(link_target))
+        else:
+            candidate = Path(
+                os.path.normpath(logical_entry.parent / link_target)
+            )
+
+        try:
+            return Path(os.path.realpath(candidate, strict=False))
+        except OSError:
+            return candidate
 
     @staticmethod
     def _replace_target(
