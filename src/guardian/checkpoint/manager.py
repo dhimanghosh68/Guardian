@@ -3,6 +3,7 @@ from pathlib import Path
 from guardian.checkpoint.state import CheckpointState
 from guardian.checkpoint.store import CheckpointStore
 from guardian.core.request import GuardianRequest
+from guardian.restore import RestoreBackend, RestoreResult, RestoreStatus
 from guardian.sandbox import SandboxWorkspace
 
 
@@ -13,9 +14,11 @@ class CheckpointManager:
         self,
         workspace: SandboxWorkspace | None = None,
         store: CheckpointStore | None = None,
+        restore_backend: RestoreBackend | None = None,
     ) -> None:
         self._workspace = workspace
         self._store = store
+        self._restore_backend = restore_backend
 
     def prepare(self, request: GuardianRequest) -> CheckpointState:
         """Prepare and optionally persist a checkpoint for a request."""
@@ -82,14 +85,40 @@ class CheckpointManager:
 
         return self._store.load(checkpoint_id)
 
-    def restore(self, checkpoint: CheckpointState) -> None:
-        """Restore a checkpoint.
+    def restore(self, checkpoint: CheckpointState) -> RestoreResult:
+        """Restore a checkpoint through a supplied capability backend."""
 
-        The filesystem mutation backend remains intentionally deferred.
-        """
+        if self._restore_backend is None:
+            return RestoreResult(
+                status=RestoreStatus.REJECTED,
+                checkpoint_id=checkpoint.checkpoint_id,
+                target=checkpoint.normalized_target(),
+                message="no restoration backend is available",
+            )
 
-        raise NotImplementedError(
-            "checkpoint restoration backend is not implemented"
+        if not self._restore_backend.can_restore(checkpoint):
+            return RestoreResult(
+                status=RestoreStatus.REJECTED,
+                checkpoint_id=checkpoint.checkpoint_id,
+                target=checkpoint.normalized_target(),
+                message="restoration backend does not support this checkpoint",
+            )
+
+        try:
+            self._restore_backend.restore(checkpoint)
+        except Exception as exc:
+            return RestoreResult(
+                status=RestoreStatus.FAILED,
+                checkpoint_id=checkpoint.checkpoint_id,
+                target=checkpoint.normalized_target(),
+                message=f"restoration failed: {exc}",
+            )
+
+        return RestoreResult(
+            status=RestoreStatus.RESTORED,
+            checkpoint_id=checkpoint.checkpoint_id,
+            target=checkpoint.normalized_target(),
+            message="checkpoint restored successfully",
         )
 
     def _persist(self, checkpoint: CheckpointState) -> None:

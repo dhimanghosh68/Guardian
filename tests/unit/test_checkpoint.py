@@ -91,19 +91,6 @@ def test_checkpoint_manager_creates_checkpoint() -> None:
     ).resolve()
 
 
-def test_checkpoint_manager_restore_is_not_implemented() -> None:
-    manager = CheckpointManager()
-
-    checkpoint = manager.create(
-        workspace=Path("/tmp/guardian-workspace"),
-        operation="modify",
-        target=Path("/tmp/guardian-workspace/project"),
-    )
-
-    with pytest.raises(NotImplementedError):
-        manager.restore(checkpoint)
-
-
 def test_checkpoint_has_unique_id() -> None:
     first = CheckpointState(
         workspace=Path("/tmp/guardian-workspace"),
@@ -400,3 +387,98 @@ def test_checkpoint_manager_prepare_persists_checkpoint(tmp_path) -> None:
     checkpoint = manager.prepare(request)
 
     assert manager.load(checkpoint.checkpoint_id) == checkpoint
+
+def test_checkpoint_restore_without_backend_is_explicit(tmp_path) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import RestoreStatus
+
+    manager = CheckpointManager()
+
+    checkpoint = manager.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.REJECTED
+    assert not result.restored
+    assert "no restoration backend" in result.message
+
+
+def test_checkpoint_restore_uses_capability_backend(tmp_path) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import RestoreStatus
+
+    class Backend:
+        def can_restore(self, checkpoint) -> bool:
+            return True
+
+        def restore(self, checkpoint) -> None:
+            self.restored = checkpoint
+
+    backend = Backend()
+    manager = CheckpointManager(restore_backend=backend)
+
+    checkpoint = manager.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.RESTORED
+    assert result.restored
+    assert backend.restored == checkpoint
+
+
+def test_checkpoint_restore_rejects_unsupported_capability(tmp_path) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import RestoreStatus
+
+    class Backend:
+        def can_restore(self, checkpoint) -> bool:
+            return False
+
+        def restore(self, checkpoint) -> None:
+            raise AssertionError("unsupported backend must not be invoked")
+
+    manager = CheckpointManager(restore_backend=Backend())
+
+    checkpoint = manager.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.REJECTED
+    assert "does not support" in result.message
+
+
+def test_checkpoint_restore_reports_backend_failure(tmp_path) -> None:
+    from guardian.checkpoint import CheckpointManager
+    from guardian.restore import RestoreStatus
+
+    class Backend:
+        def can_restore(self, checkpoint) -> bool:
+            return True
+
+        def restore(self, checkpoint) -> None:
+            raise RuntimeError("backend failure")
+
+    manager = CheckpointManager(restore_backend=Backend())
+
+    checkpoint = manager.create(
+        workspace=tmp_path / "workspace",
+        operation="modify",
+        target=tmp_path / "workspace" / "project",
+    )
+
+    result = manager.restore(checkpoint)
+
+    assert result.status is RestoreStatus.FAILED
+    assert "backend failure" in result.message
