@@ -10,3 +10,4 @@ class AuthorizedExecution:
 
     operation: GuardianOperation
     target: Path
+    content: str | None = None

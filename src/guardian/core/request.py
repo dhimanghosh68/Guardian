@@ -10,6 +10,7 @@ class GuardianRequest:
 
     target: Path
     operation: str
+    content: str | None = None
 
     def normalized_target(self) -> Path:
         """Return the canonical target path."""

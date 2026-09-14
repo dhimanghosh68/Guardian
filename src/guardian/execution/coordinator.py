@@ -51,6 +51,7 @@ class ExecutionCoordinator:
         authorization = AuthorizedExecution(
             operation=request.parsed_operation(),
             target=decision.target,
+            content=request.content,
         )
 
         try:
